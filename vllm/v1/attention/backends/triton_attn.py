@@ -614,10 +614,19 @@ class TritonAttentionImpl(AttentionImpl):
                     f"{self._turboquant_metadata.recipe} vs {self.kv_cache_dtype}."
                 )
             if self._turboquant_metadata.head_size != self.head_size:
-                raise ValueError(
-                    "TurboQuant metadata head_size does not match layer head size: "
-                    f"{self._turboquant_metadata.head_size} vs {self.head_size}."
+                # Gemma 4 has variable head sizes (256 sliding / 512 full).
+                # Skip TurboQuant for layers where the metadata head_size
+                # doesn't match, falling back to standard KV cache for those.
+                logger.warning(
+                    "TurboQuant metadata head_size (%d) != layer head_size "
+                    "(%d) for %s. Disabling TurboQuant for this layer.",
+                    self._turboquant_metadata.head_size,
+                    self.head_size,
+                    turboquant_layer_name,
                 )
+                self.kv_cache_dtype = "auto"
+                self._turboquant_metadata = None
+                return
             layer_metadata = self._turboquant_metadata.get_layer(turboquant_layer_name)
             if (
                 len(layer_metadata.key.high_precision_indices) != self.num_kv_heads
