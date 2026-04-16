@@ -251,6 +251,12 @@ class AutoWeightsLoader:
             for stat_name in ("running_mean", "running_var", "num_batches_tracked"):
                 child_params[stat_name] = module_state_dict[stat_name]
 
+        # Also load registered buffers that may be in the checkpoint
+        # (e.g., Gemma4ClippableLinear clipping parameters)
+        for buf_name, buf_tensor in module.named_buffers(recurse=False):
+            if buf_name not in child_params:
+                child_params[buf_name] = buf_tensor
+
     def _load_module(
         self,
         base_prefix: str,

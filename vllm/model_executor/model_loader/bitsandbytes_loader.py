@@ -185,6 +185,10 @@ class BitsAndBytesModelLoader(BaseModelLoader):
             # mapping weight names from transformers to vllm while preserving
             # original names.
             mapped_name = self.weight_mapper(org_name)
+            if mapped_name is None:
+                # Skip weights that don't have a vLLM mapping (e.g.,
+                # registered buffers like Gemma4ClippableLinear clipping params)
+                continue
             mapped_name = _maybe_pool_model(mapped_name)
 
             yield org_name, mapped_name, param
