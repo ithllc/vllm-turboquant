@@ -113,6 +113,18 @@ class UVAOffloader(BaseOffloader):
         if offloaded_parameters and not self.uva_offloading:
             original_forward = module.forward
 
+            # BNB quantization attribute names that must be preserved.
+            # functional_call replaces nn.Parameters with plain tensors
+            # from state_dict().to(device), which lose custom attributes
+            # like bnb_quant_state and bnb_shard_offsets that BNB sets
+            # during weight loading (which happens AFTER this wrapping).
+            _bnb_attr_names = (
+                "bnb_quant_state",
+                "bnb_shard_offsets",
+                "load_in_8bit",
+                "matmul_state",
+            )
+
             def forward(*args, **kwargs):
                 module.forward = original_forward
                 device_state = {
@@ -122,6 +134,19 @@ class UVAOffloader(BaseOffloader):
                     k: v.to(device, non_blocking=True)
                     for k, v in module.state_dict().items()
                 }
+
+                # Re-attach BNB quantization attributes from the
+                # original nn.Parameter objects to the new device
+                # tensors. The attributes are read at forward time
+                # (not wrap time) because BNB sets them during weight
+                # loading which happens after offloader wrapping.
+                for pname, param in module.named_parameters():
+                    if pname not in device_state:
+                        continue
+                    for attr in _bnb_attr_names:
+                        val = getattr(param, attr, None)
+                        if val is not None:
+                            setattr(device_state[pname], attr, val)
 
                 # set `tie_weights=False` as tied weights in original model
                 # become untied when calling .to(device) individually
