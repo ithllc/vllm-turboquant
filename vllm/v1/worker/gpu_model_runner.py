@@ -6584,12 +6584,20 @@ class GPUModelRunner(
                     )
                     kernel_num_blocks = num_blocks * num_blocks_per_kv_block
 
+                    # Prefer the spec's cache_dtype_str (may be overridden
+                    # per-layer by TurboQuant graceful-skip) over the global
+                    # cache_config.cache_dtype.
+                    spec_cache_dtype = getattr(kv_cache_spec, "cache_dtype_str", None)
                     kv_cache_shape = attn_backend.get_kv_cache_shape(
                         kernel_num_blocks,
                         kernel_block_size,
                         kv_cache_spec.num_kv_heads,
                         kv_cache_spec.head_size,
-                        cache_dtype_str=self.cache_config.cache_dtype,
+                        cache_dtype_str=(
+                            spec_cache_dtype
+                            if spec_cache_dtype is not None
+                            else self.cache_config.cache_dtype
+                        ),
                     )
                     dtype = kv_cache_spec.dtype
                     try:
@@ -6610,12 +6618,45 @@ class GPUModelRunner(
                         kv_cache_stride_order.index(i)
                         for i in range(len(kv_cache_stride_order))
                     ]
-                    kv_caches[layer_name] = (
-                        kv_cache_raw_tensors[layer_name]
-                        .view(dtype)
-                        .view(kv_cache_shape)
-                        .permute(*inv_order)
-                    )
+
+                    real_page_size = kv_cache_spec.real_page_size_bytes
+                    padded_page_size = kv_cache_spec.page_size_bytes
+                    is_padded = padded_page_size > real_page_size
+
+                    if is_padded:
+                        # page_size_padded path: the raw tensor is allocated
+                        # at padded_page_size per block, but kv_cache_shape
+                        # only covers real_page_size. Use as_strided with
+                        # block stride = padded_page_size (in elements of
+                        # dtype) so unused bytes are skipped and no copy is
+                        # made. TurboQuant Triton kernels pass cache.stride()
+                        # explicitly, so non-contiguous layout is safe.
+                        dtype_size = get_dtype_size(dtype)
+                        assert padded_page_size % dtype_size == 0, (
+                            "padded page size must be a multiple of dtype size"
+                        )
+                        viewed = kv_cache_raw_tensors[layer_name].view(dtype)
+                        # Contiguous element strides for inner dims
+                        element_strides = [1]
+                        for dim_size in reversed(kv_cache_shape[1:]):
+                            element_strides.insert(0, element_strides[0] * dim_size)
+                        # Replace the leading (block) stride with the padded
+                        # page jump, measured in dtype elements.
+                        padded_block_stride = padded_page_size // dtype_size
+                        all_strides = (padded_block_stride, *element_strides[1:])
+                        kv_cache = torch.as_strided(
+                            viewed,
+                            size=kv_cache_shape,
+                            stride=all_strides,
+                        )
+                        kv_caches[layer_name] = kv_cache.permute(*inv_order)
+                    else:
+                        kv_caches[layer_name] = (
+                            kv_cache_raw_tensors[layer_name]
+                            .view(dtype)
+                            .view(kv_cache_shape)
+                            .permute(*inv_order)
+                        )
                 elif isinstance(kv_cache_spec, MambaSpec):
                     has_mamba = True
                     raw_tensor = kv_cache_raw_tensors[layer_name]

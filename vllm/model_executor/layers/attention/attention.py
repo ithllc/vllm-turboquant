@@ -334,6 +334,15 @@ class Attention(nn.Module, AttentionLayerBase):
             kv_sharing_target_layer_name,
             **extra_impl_args,
         )
+        # Propagate any TurboQuant graceful-skip performed inside the impl
+        # (e.g., head_size mismatch for Gemma 4 full-attention layers) back
+        # to the layer so get_kv_cache_spec allocates the correct dtype.
+        impl_kv_cache_dtype = getattr(self.impl, "kv_cache_dtype", None)
+        if impl_kv_cache_dtype is not None and impl_kv_cache_dtype != kv_cache_dtype:
+            self.kv_cache_dtype = impl_kv_cache_dtype
+            self.kv_cache_torch_dtype = kv_cache_dtype_str_to_dtype(
+                impl_kv_cache_dtype, vllm_config.model_config
+            )
         self.backend = AttentionBackendEnum[self.attn_backend.get_name()]
         self.dtype = dtype
 
@@ -526,6 +535,13 @@ class Attention(nn.Module, AttentionLayerBase):
         block_size = vllm_config.cache_config.block_size
         # Should not be called for enc-dec or encoder-only attention.
         assert self.attn_type == AttentionType.DECODER
+        # Use the layer's (possibly-overridden) kv_cache_dtype. TurboQuant's
+        # graceful skip can downgrade a layer from a compressed format to
+        # standard bf16, and the spec must reflect that to allocate the
+        # right storage size.
+        cache_dtype_str = self.kv_cache_dtype
+        if cache_dtype_str is None:
+            cache_dtype_str = vllm_config.cache_config.cache_dtype
         if self.sliding_window is not None:
             assert not vllm_config.model_config.use_mla, (
                 "MLA is not supported for slidingwindow"
@@ -535,7 +551,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 num_kv_heads=self.num_kv_heads,
                 head_size=self.head_size,
                 dtype=self.kv_cache_torch_dtype,
-                cache_dtype_str=vllm_config.cache_config.cache_dtype,
+                cache_dtype_str=cache_dtype_str,
                 sliding_window=self.sliding_window,
             )
         else:
@@ -545,7 +561,7 @@ class Attention(nn.Module, AttentionLayerBase):
                 head_size=self.head_size,
                 head_size_v=self.head_size_v,
                 dtype=self.kv_cache_torch_dtype,
-                cache_dtype_str=vllm_config.cache_config.cache_dtype,
+                cache_dtype_str=cache_dtype_str,
             )
 
 

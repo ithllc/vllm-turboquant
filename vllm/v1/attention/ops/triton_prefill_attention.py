@@ -189,17 +189,22 @@ def get_block_size(
         and head_dim > 128
         and device is not None
         and device.type == "cuda"
-        and torch.cuda.get_device_capability(device) == (12, 1)
     ):
-        # GB10 only exposes 101376 bytes of opt-in shared memory per block.
-        # BLOCK=128 with D=256 overflows that budget for this kernel shape.
-        return 64
-    elif current_platform.is_cuda_alike() and current_platform.has_device_capability(
-        80
-    ):
+        # BLOCK=128 with D>128 can exceed the shared-memory budget on GPUs
+        # that do not expose the full 160 KB opt-in limit (A100). SM_86
+        # (RTX A2000 etc.) and SM_121 (GB10) cap at 101376 bytes, so we
+        # drop to BLOCK=64 for these devices.
+        props = torch.cuda.get_device_properties(device)
+        max_shared = getattr(
+            props,
+            "shared_memory_per_block_optin",
+            props.shared_memory_per_block,
+        )
+        if max_shared < 163840:
+            return 64
+    if current_platform.is_cuda_alike() and current_platform.has_device_capability(80):
         return 128
-    else:
-        return 64
+    return 64
 
 
 def context_attention_fwd(

@@ -915,10 +915,9 @@ def unify_kv_cache_spec_page_size(
     kv_cache_spec: dict[str, KVCacheSpec],
 ) -> dict[str, KVCacheSpec]:
     """
-    Unify the page size of the given KVCacheSpec. If the page size of all layers
-    are the same, return the original KVCacheSpec. If not same, unify the page
-    size by increasing the block size of layers with smaller page size. Raise
-    NotImplementedError if failed to unify the page size.
+    Unify the page size of the given KVCacheSpec. Uses block_size scaling
+    when page sizes are evenly divisible, or page_size_padded when they
+    are not (e.g., TurboQuant with variable head_dim).
 
     Args:
         kv_cache_spec: The KVCacheSpec of each attention layer in the model
@@ -926,6 +925,8 @@ def unify_kv_cache_spec_page_size(
     Returns:
         The updated KVCacheSpec with the same page_size_bytes.
     """
+    from vllm.v1.kv_cache_interface import AttentionSpec
+
     page_sizes = {layer.page_size_bytes for layer in kv_cache_spec.values()}
     if len(page_sizes) <= 1:
         # All layers have the same page size, no need to unify.
@@ -938,14 +939,21 @@ def unify_kv_cache_spec_page_size(
             new_kv_cache_spec[layer_name] = layer_spec
         else:
             layer_page_size = layer_spec.page_size_bytes
-            if max_page_size % layer_page_size != 0:
+            if max_page_size % layer_page_size == 0:
+                # Clean integer ratio — scale block_size (existing behavior).
+                ratio = max_page_size // layer_page_size
+                new_block_size = layer_spec.block_size * ratio
+                new_spec = replace(layer_spec, block_size=new_block_size)
+            elif isinstance(layer_spec, AttentionSpec):
+                # Non-integer ratio (e.g., TurboQuant variable head_dim).
+                # Pad to max page size via page_size_padded; kernels read
+                # strides explicitly so padding bytes are never accessed.
+                new_spec = replace(layer_spec, page_size_padded=max_page_size)
+            else:
                 raise NotImplementedError(
                     "The page size of the layer is not divisible by the "
                     "maximum page size. Cannot unify by adjusting block_size."
                 )
-            ratio = max_page_size // layer_page_size
-            new_block_size = layer_spec.block_size * ratio
-            new_spec = replace(layer_spec, block_size=new_block_size)
             assert new_spec.page_size_bytes == max_page_size
             new_kv_cache_spec[layer_name] = new_spec
     return new_kv_cache_spec
