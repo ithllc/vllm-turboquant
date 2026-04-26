@@ -13,7 +13,7 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vllm"
+name = "VLLM_TURBOQUANT_NAME_PLACEHOLDER"
 authors = [{name = "vLLM Team"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
