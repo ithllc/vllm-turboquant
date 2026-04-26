@@ -100,6 +100,13 @@ class EngineCore:
 
         load_general_plugins()
 
+        # TurboQuant: hard-fail fast if the installed wheel's built-arch
+        # doesn't match the runtime GPU. No-op for editable installs (where
+        # TURBOQUANT_BUILD_ARCH is empty).
+        from vllm.turboquant_arch_check import assert_arch_compatibility
+
+        assert_arch_compatibility()
+
         self.vllm_config = vllm_config
         if not vllm_config.parallel_config.data_parallel_rank_local:
             logger.info(

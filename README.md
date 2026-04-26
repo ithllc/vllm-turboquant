@@ -1,3 +1,29 @@
+# vllm-turboquant
+
+This is a fork of [vLLM](https://github.com/vllm-project/vllm) with TurboQuant
+KV cache compression (kv_cache_dtype `turboquant25` / `turboquant35`). Not
+affiliated with the upstream vLLM project.
+
+## Install (pick the wheel that matches your GPU)
+
+| Your GPU                                       | Install command                            |
+|------------------------------------------------|--------------------------------------------|
+| RTX 30/40-series, A100, H100, GH200            | `pip install vllm-turboquant`              |
+| RTX 50-series, B100/B200, GB10 (DGX Spark)     | `pip install vllm-turboquant-blackwell`    |
+
+`pip install` resolves wheels from the GitHub Release attached to each tag —
+add `--find-links https://github.com/tqcli/vllm-turboquant/releases/expanded_assets/v0.7.0-tq1`
+if you want the exact 0.7.0-tq1 build.
+
+The `vllm` Python import name is identical in both flavours; only the wheel
+distribution differs. If you install the wrong flavour, the engine raises
+`RuntimeError` on first GPU init with the correct pip command.
+
+## License
+
+Apache-2.0 (inherited from upstream vllm-project/vllm). The `NOTICE` file
+preserves upstream attributions.
+
 <!-- markdownlint-disable MD001 MD041 -->
 <p align="center">
   <picture>
